@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>站内导航</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: linear-gradient(145deg, #f0f4fa, #d9e2ef);
+      min-height: 100vh;
+      padding: 30px 16px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .box {
+      width: 100%;
+      max-width: 1000px;
+      background: rgba(255,255,255,0.6);
+      border-radius: 24px;
+      padding: 30px 24px;
+      box-shadow: 0 16px 32px rgba(0,0,0,0.12);
+      backdrop-filter: blur(10px);
+    }
+    h1 {
+      text-align: center;
+      font-size: 28px;
+      color: #1e2c3a;
+      margin-bottom: 6px;
+    }
+    .tip {
+      text-align: center;
+      color: #5e7388;
+      font-size: 14px;
+      margin-bottom: 24px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+      gap: 14px;
+    }
+    .card {
+      display: block;
+      text-align: center;
+      padding: 18px 10px;
+      background: rgba(255,255,255,0.75);
+      border: 1px solid rgba(255,255,255,0.9);
+      border-radius: 18px;
+      text-decoration: none;
+      color: #1e2c3a;
+      box-shadow: 0 6px 14px rgba(0,0,0,0.05);
+      transition: 0.2s;
+    }
+    .card:hover {
+      transform: translateY(-4px);
+      background: #fff;
+    }
+    .icon {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+    .name {
+      font-size: 15px;
+      font-weight: 500;
+    }
+    .path {
+      font-size: 12px;
+      color: #5e7388;
+      margin-top: 4px;
+      word-break: break-all;
+    }
+    .footer {
+      text-align: center;
+      margin-top: 24px;
+      color: #5a6f82;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>站内导航</h1>
+    <p class="tip">点击卡片跳转站内页面</p>
+
+    <div class="grid" id="grid"></div>
+
+    <div class="footer">⚡ 只改下面的 links 数组即可增删卡片</div>
+  </div>
+
+  <script>
+    // ========================================
+    // 只改这里！一行一张卡片
+    // 格式： { icon: "图标", name: "名称", href: "链接" }
+    // ========================================
+    const links = [
+      { icon: "🏠", name: "网站首页", href: "index.html" },
+      { icon: "📦", name: "产品中心", href: "products/index.html" },
+      { icon: "💡", name: "解决方案", href: "solutions/index.html" },
+      { icon: "📝", name: "博客文章", href: "blog/index.html" },
+      { icon: "📰", name: "新闻动态", href: "news/index.html" },
+      { icon: "🖼️", name: "案例展示", href: "cases/index.html" },
+      { icon: "ℹ️", name: "关于我们", href: "about/index.html" },
+      { icon: "📞", name: "联系我们", href: "contact/index.html" },
+      { icon: "❓", name: "帮助中心", href: "help/index.html" },
+      { icon: "👤", name: "用户中心", href: "user/index.html" },
+      { icon: "⚙️", name: "设置", href: "settings/index.html" },
+      { icon: "⬇️", name: "下载中心", href: "download/index.html" },
+      { icon: "🛠️", name: "服务支持", href: "support/index.html" },
+      { icon: "🤝", name: "合作伙伴", href: "partners/index.html" },
+      { icon: "💼", name: "招贤纳士", href: "careers/index.html" },
+      { icon: "💼", name: "招贤士", href: "careers2/index.html" },
+      { icon: "🔒", name: "隐私政策", href: "privacy/index.html" }
+          ];
+
+    // ========================================
+    // 下面不用动，自动生成卡片
+    // ========================================
+    const grid = document.getElementById("grid");
+    grid.innerHTML = links.map(item => `
+      <a class="card" href="${item.href}">
+        <div class="icon">${item.icon}</div>
+        <div class="name">${item.name}</div>
+        <div class="path">${item.href}</div>
+      </a>
+    `).join("");
+  </script>
+</body>
+</html>
