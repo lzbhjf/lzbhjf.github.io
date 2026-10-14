@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>动态锁屏 · 极光夜空</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #000;
+    font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    cursor: default;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: block;
+  }
+  .lockscreen {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    pointer-events: none;
+    user-select: none;
+    text-shadow: 0 0 30px rgba(120, 200, 255, 0.6);
+  }
+  .time {
+    font-size: clamp(64px, 14vw, 160px);
+    font-weight: 200;
+    letter-spacing: 6px;
+    line-height: 1;
+    margin-bottom: 12px;
+  }
+  .date {
+    font-size: clamp(16px, 2.2vw, 26px);
+    font-weight: 300;
+    letter-spacing: 4px;
+    opacity: 0.85;
+  }
+  .hint {
+    position: fixed;
+    bottom: 36px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(200, 220, 245, 0.55);
+    font-size: 13px;
+    letter-spacing: 3px;
+    animation: breathe 3s ease-in-out infinite;
+    pointer-events: none;
+    text-align: center;
+    line-height: 1.8;
+    transition: opacity 0.6s;
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 0.3; }
+    50%      { opacity: 0.75; }
+  }
+  .pause-badge {
+    position: fixed;
+    top: 24px;
+    right: 28px;
+    color: rgba(200, 220, 245, 0.7);
+    font-size: 13px;
+    letter-spacing: 2px;
+    padding: 6px 14px;
+    border: 1px solid rgba(150, 200, 255, 0.3);
+    border-radius: 20px;
+    background: rgba(10, 20, 40, 0.35);
+    backdrop-filter: blur(6px);
+    opacity: 0;
+    transition: opacity 0.4s;
+    pointer-events: none;
+  }
+  .pause-badge.show { opacity: 1; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div class="lockscreen">
+  <div class="time" id="clock">--:--</div>
+  <div class="date" id="date"></div>
+</div>
+<div class="hint" id="hint">自动演示中 · 空格暂停 · F 全屏</div>
+<div class="pause-badge" id="pauseBadge">⏸ 已暂停</div>
+
+<script>
+(() => {
+  'use strict';
+
+  const canvas = document.getElementById('stage');
+  const ctx = canvas.getContext('2d', { alpha: false });
+  const hintEl = document.getElementById('hint');
+  const pauseBadge = document.getElementById('pauseBadge');
+
+  let W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
+  let paused = false;
+
+  /* ==================== 自动"虚拟鼠标" ==================== */
+  // 用一个随时间运动的虚拟指针，模拟鼠标效果，让画面自动流动
+  const vPointer = {
+    x: 0, y: 0,
+    smoothX: 0, smoothY: 0,
+    active: true,
+    isDown: false
+  };
+
+  // 自动拖尾（模拟按住拖动）
+  let autoTrail = {
+    points: [],
+    maxPoints: 50,
+    minDist: 5,
+    timer: 0,
+    nextEmit: 1.2,   // 秒
+    duration: 2.5    // 每次拖尾持续秒数
+  };
+
+  let ripples = [];
+  let currentHue = 180;
+
+  /* ==================== 尺寸 ==================== */
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width  = W * DPR;
+    canvas.height = H * DPR;
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    initStars();
+    vPointer.x = vPointer.smoothX = W / 2;
+    vPointer.y = vPointer.smoothY = H / 2;
+  }
+  window.addEventListener('resize', resize);
+
+  /* ==================== 星空 ==================== */
+  let stars = [];
+  function initStars() {
+    const count = Math.floor((W * H) / 3500);
+    stars = [];
+    for (let i = 0; i < count; i++) {
+      const s = {
+        baseX: Math.random() * W,
+        baseY: Math.random() * H * 0.85,
+        x: 0, y: 0,
+        r: Math.random() * 1.4 + 0.3,
+        baseAlpha: Math.random() * 0.6 + 0.4,
+        twinkleSpeed: Math.random() * 2 + 0.5,
+        phase: Math.random() * Math.PI * 2,
+        hue: Math.random() < 0.2 ? 200 : 220,
+        offX: 0, offY: 0
+      };
+      s.x = s.baseX; s.y = s.baseY;
+      stars.push(s);
+    }
+  }
+
+  function drawStars(t) {
+    for (const s of stars) {
+      // 虚拟指针推开星星
+      const dx = s.baseX - vPointer.smoothX;
+      const dy = s.baseY - vPointer.smoothY;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 130 && dist > 0.01) {
+        const force = (1 - dist / 130) * 16;
+        s.offX += ((dx / dist) * force - s.offX) * 0.10;
+        s.offY += ((dy / dist) * force - s.offY) * 0.10;
+      } else {
+        s.offX += (0 - s.offX) * 0.06;
+        s.offY += (0 - s.offY) * 0.06;
+      }
+
+      s.x = s.baseX + s.offX;
+      s.y = s.baseY + s.offY;
+
+      const alpha = s.baseAlpha * (0.6 + 0.4 * Math.sin(t * s.twinkleSpeed + s.phase));
+
+      let boost = 0;
+      if (dist < 180) boost = (1 - dist / 180) * 0.5;
+
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r + boost * 0.8, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${s.hue}, 60%, 90%, ${Math.min(1, alpha + boost)})`;
+      ctx.fill();
+    }
+  }
+
+  /* ==================== 极光 ==================== */
+  const auroraLayers = [
+    { hue: 150, sat: 90, baseY: 0.32, amp: 60, freq: 0.0018, speed: 0.35, thick: 90,  alpha: 0.55, phase: 0.0, mouseInfluence: 0.55 },
+    { hue: 175, sat: 95, baseY: 0.40, amp: 75, freq: 0.0014, speed: 0.28, thick: 110, alpha: 0.45, phase: 1.3, mouseInfluence: 0.75 },
+    { hue: 200, sat: 90, baseY: 0.48, amp: 55, freq: 0.0022, speed: 0.42, thick: 80,  alpha: 0.50, phase: 2.6, mouseInfluence: 0.90 },
+    { hue: 260, sat: 85, baseY: 0.55, amp: 65, freq: 0.0016, speed: 0.30, thick: 100, alpha: 0.40, phase: 3.9, mouseInfluence: 0.70 },
+    { hue: 310, sat: 80, baseY: 0.62, amp: 50, freq: 0.0020, speed: 0.38, thick: 85,  alpha: 0.35, phase: 5.2, mouseInfluence: 0.45 },
+    { hue: 160, sat: 95, baseY: 0.70, amp: 70, freq: 0.0015, speed: 0.25, thick: 105, alpha: 0.42, phase: 6.5, mouseInfluence: 0.30 },
+  ];
+
+  function drawAurora(t) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    for (const L of auroraLayers) {
+      const baseY = H * L.baseY;
+
+      let mouseAttractY = 0;
+      const mouseYRatio = vPointer.smoothY / H;
+      const distToLayer = Math.abs(mouseYRatio - L.baseY);
+      const proximity = Math.max(0, 1 - distToLayer * 2.2);
+      mouseAttractY = (vPointer.smoothY - baseY) * 0.3 * proximity * L.mouseInfluence;
+
+      const step = 6;
+
+      ctx.beginPath();
+      for (let x = 0; x <= W; x += step) {
+        const y = getAuroraY(x, t, L, baseY, mouseAttractY);
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      for (let x = W; x >= 0; x -= step) {
+        const y = getAuroraY(x, t, L, baseY, mouseAttractY) + L.thick;
+        ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+
+      const grad = ctx.createLinearGradient(0, 0, W, 0);
+      const hueShift = Math.sin(t * 0.15 + L.phase) * 30;
+      const d = Math.hypot(vPointer.smoothX - W/2, vPointer.smoothY - H * L.baseY);
+      const hueBoost = Math.max(0, 1 - d / (Math.min(W, H) * 0.8)) * 20;
+
+      grad.addColorStop(0.0, `hsla(${L.hue + hueShift + hueBoost}, ${L.sat}%, 60%, 0)`);
+      grad.addColorStop(0.2, `hsla(${L.hue + hueShift + hueBoost}, ${L.sat}%, 65%, ${L.alpha * 0.6})`);
+      grad.addColorStop(0.5, `hsla(${L.hue + hueShift + hueBoost}, ${L.sat}%, 70%, ${L.alpha})`);
+      grad.addColorStop(0.8, `hsla(${L.hue + hueShift + hueBoost}, ${L.sat}%, 65%, ${L.alpha * 0.6})`);
+      grad.addColorStop(1.0, `hsla(${L.hue + hueShift + hueBoost}, ${L.sat}%, 60%, 0)`);
+
+      ctx.fillStyle = grad;
+      ctx.filter = 'blur(28px)';
+      ctx.fill();
+      ctx.filter = 'none';
+
+      ctx.beginPath();
+      for (let x = 0; x <= W; x += step) {
+        const y = getAuroraY(x, t, L, baseY, mouseAttractY);
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = `hsla(${L.hue + hueShift + hueBoost + 20}, 100%, 80%, ${L.alpha * 0.9})`;
+      ctx.lineWidth = 2.5;
+      ctx.filter = 'blur(3px)';
+      ctx.stroke();
+      ctx.filter = 'none';
+    }
+
+    ctx.restore();
+  }
+
+  function getAuroraY(x, t, L, baseY, mouseAttractY) {
+    const f = L.freq, s = L.speed, p = L.phase;
+    const y1 = Math.sin(x * f + t * s + p) * L.amp;
+    const y2 = Math.sin(x * f * 2.7 + t * s * 1.6 + p * 1.4) * L.amp * 0.45;
+    const y3 = Math.sin(x * f * 0.5 + t * s * 0.7 + p * 0.8) * L.amp * 0.7;
+
+    let yMouse = 0;
+    if (mouseAttractY !== 0) {
+      const dx = x - vPointer.smoothX;
+      const gaussian = Math.exp(-(dx * dx) / (2 * 220 * 220));
+      yMouse = mouseAttractY * gaussian;
+    }
+
+    return baseY + y1 + y2 + y3 + yMouse;
+  }
+
+  /* ==================== 虚拟指针光晕 ==================== */
+  function drawPointerGlow(t) {
+    const cx = vPointer.smoothX;
+    const cy = vPointer.smoothY;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    const pulse = 0.5 + 0.5 * Math.sin(t * 2.5);
+    const radius = 180 + pulse * 30;
+    const radial = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
+    radial.addColorStop(0, `hsla(${currentHue}, 90%, 75%, 0.22)`);
+    radial.addColorStop(0.4, `hsla(${currentHue + 30}, 90%, 70%, 0.10)`);
+    radial.addColorStop(1, `hsla(${currentHue + 60}, 90%, 60%, 0)`);
+    ctx.fillStyle = radial;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, 22);
+    core.addColorStop(0, `hsla(${currentHue}, 100%, 95%, 0.75)`);
+    core.addColorStop(1, `hsla(${currentHue}, 100%, 80%, 0)`);
+    ctx.fillStyle = core;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  /* ==================== 涟漪/粒子 ==================== */
+  function spawnRipple(x, y) {
+    const hue = currentHue + (Math.random() - 0.5) * 60;
+    ripples.push({
+      type: 'wave', x, y,
+      r: 8, maxR: 200 + Math.random() * 80,
+      life: 1.0, hue
+    });
+    const particleCount = 20;
+    for (let i = 0; i < particleCount; i++) {
+      const angle = (i / particleCount) * Math.PI * 2 + Math.random() * 0.3;
+      const speed = 2 + Math.random() * 4;
+      ripples.push({
+        type: 'particle',
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        r: 1.5 + Math.random() * 2,
+        life: 1.0,
+        decay: 0.018 + Math.random() * 0.012,
+        hue: hue + (Math.random() - 0.5) * 40
+      });
+    }
+  }
+
+  function updateRipples() {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      if (r.type === 'particle') {
+        r.x += r.vx;
+        r.y += r.vy;
+        r.vx *= 0.96;
+        r.vy *= 0.96;
+        r.vy += 0.05;
+        r.life -= r.decay;
+        if (r.life <= 0) ripples.splice(i, 1);
+      } else {
+        r.r += (r.maxR - r.r) * 0.08;
+        r.life -= 0.025;
+        if (r.life <= 0) ripples.splice(i, 1);
+      }
+    }
+  }
+
+  function drawRipples() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    for (const r of ripples) {
+      if (r.type === 'particle') {
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${r.hue}, 100%, 80%, ${r.life})`;
+        ctx.filter = 'blur(1px)';
+        ctx.fill();
+        ctx.filter = 'none';
+      } else {
+        const grad = ctx.createRadialGradient(r.x, r.y, r.r * 0.7, r.x, r.y, r.r);
+        grad.addColorStop(0, `hsla(${r.hue}, 100%, 80%, 0)`);
+        grad.addColorStop(0.7, `hsla(${r.hue}, 100%, 75%, ${r.life * 0.5})`);
+        grad.addColorStop(1, `hsla(${r.hue + 40}, 100%, 70%, 0)`);
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, r.r, 0, Math.PI * 2);
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 3;
+        ctx.filter = 'blur(2px)';
+        ctx.stroke();
+        ctx.filter = 'none';
+      }
+    }
+    ctx.restore();
+  }
+
+  /* ==================== 自动拖尾 ==================== */
+  function emitAutoTrailPoint(dt) {
+    // 定时触发新的拖尾周期
+    autoTrail.timer += dt;
+    if (autoTrail.timer > autoTrail.nextEmit) {
+      autoTrail.timer = 0;
+      autoTrail.nextEmit = 4 + Math.random() * 4; // 下一次 4~8 秒后
+      autoTrail.remaining = autoTrail.duration;
+      autoTrail.points.length = 0;
+      // 从画面某处开始
+      vPointer.autoStartX = Math.random() * W * 0.8 + W * 0.1;
+      vPointer.autoStartY = Math.random() * H * 0.5 + H * 0.25;
+    }
+
+    if (autoTrail.remaining !== undefined && autoTrail.remaining > 0) {
+      autoTrail.remaining -= dt;
+
+      // 让虚拟指针沿一条平滑的曲线运动
+      const tt = autoTrail.duration - autoTrail.remaining;
+      const cx = vPointer.autoStartX + Math.sin(tt * 1.3) * W * 0.3;
+      const cy = vPointer.autoStartY + Math.cos(tt * 1.7) * H * 0.15 + tt * 20;
+      vPointer.targetX = cx;
+      vPointer.targetY = cy;
+
+      // 记录拖尾点
+      const last = autoTrail.points[autoTrail.points.length - 1];
+      if (!last || Math.hypot(vPointer.smoothX - last.x, vPointer.smoothY - last.y) > autoTrail.minDist) {
+        autoTrail.points.push({
+          x: vPointer.smoothX,
+          y: vPointer.smoothY,
+          hue: currentHue + (Math.random() - 0.5) * 50,
+          life: 1.0,
+          decay: 0.008 + Math.random() * 0.006,
+          size: 6 + Math.random() * 4
+        });
+        while (autoTrail.points.length > autoTrail.maxPoints) autoTrail.points.shift();
+      }
+    }
+  }
+
+  function updateAutoTrail() {
+    for (let i = autoTrail.points.length - 1; i >= 0; i--) {
+      const p = autoTrail.points[i];
+      p.life -= p.decay;
+      if (p.life <= 0) autoTrail.points.splice(i, 1);
+    }
+  }
+
+  function drawAutoTrail() {
+    if (autoTrail.points.length < 2) return;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    ctx.beginPath();
+    ctx.moveTo(autoTrail.points[0].x, autoTrail.points[0].y);
+    for (let i = 1; i < autoTrail.points.length; i++) {
+      ctx.lineTo(autoTrail.points[i].x, autoTrail.points[i].y);
+    }
+    const lastHue = autoTrail.points[autoTrail.points.length - 1].hue;
+    const avgLife = autoTrail.points.reduce((s, p) => s + p.life, 0) / autoTrail.points.length;
+    ctx.strokeStyle = `hsla(${lastHue}, 100%, 75%, ${avgLife * 0.4})`;
+    ctx.lineWidth = 10;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.filter = 'blur(8px)';
+    ctx.stroke();
+    ctx.filter = 'none';
+
+    for (const p of autoTrail.points) {
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 2);
+      grad.addColorStop(0, `hsla(${p.hue}, 100%, 90%, ${p.life})`);
+      grad.addColorStop(0.5, `hsla(${p.hue}, 100%, 70%, ${p.life * 0.5})`);
+      grad.addColorStop(1, `hsla(${p.hue + 30}, 100%, 60%, 0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+
+  /* ==================== 底部雾气 ==================== */
+  function drawFog(t) {
+    const fogGrad = ctx.createLinearGradient(0, H * 0.75, 0, H);
+    fogGrad.addColorStop(0, 'rgba(20, 40, 80, 0)');
+    fogGrad.addColorStop(0.6, 'rgba(25, 55, 105, 0.35)');
+    fogGrad.addColorStop(1, 'rgba(35, 75, 140, 0.6)');
+    ctx.fillStyle = fogGrad;
+    ctx.fillRect(0, H * 0.75, W, H * 0.25);
+
+    const pulse = 0.5 + 0.5 * Math.sin(t * 0.5);
+    const cx = W * 0.5, cy = H * 0.55;
+    const radial = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.min(W, H) * 0.6);
+    radial.addColorStop(0, `rgba(80, 160, 220, ${0.10 + pulse * 0.06})`);
+    radial.addColorStop(0.5, `rgba(60, 120, 180, 0.04)`);
+    radial.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = radial;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  /* ==================== 自动随机涟漪 ==================== */
+  let autoRippleTimer = 0;
+  function autoSpawnRipple(dt) {
+    autoRippleTimer -= dt;
+    if (autoRippleTimer <= 0) {
+      autoRippleTimer = 2.5 + Math.random() * 3.5;
+      const x = Math.random() * W * 0.8 + W * 0.1;
+      const y = Math.random() * H * 0.6 + H * 0.15;
+      spawnRipple(x, y);
+    }
+  }
+
+  /* ==================== 主循环 ==================== */
+  let lastT = 0;
+  let startTime = performance.now();
+
+  function loop(now) {
+    if (paused) {
+      lastT = now;
+      requestAnimationFrame(loop);
+      return;
+    }
+
+    const dt = Math.min((now - lastT) / 1000, 0.05);
+    lastT = now;
+    const t = (now - startTime) / 1000;
+
+    // 虚拟指针平滑
+    if (vPointer.targetX === undefined) {
+      // 初始化时给个目标
+      vPointer.targetX = W / 2;
+      vPointer.targetY = H / 2;
+    }
+    vPointer.smoothX += (vPointer.targetX - vPointer.smoothX) * 0.05;
+    vPointer.smoothY += (vPointer.targetY - vPointer.smoothY) * 0.05;
+
+    // 在自动拖尾周期内，指针由 autoTrail 驱动
+    // 其余时间让指针缓慢游走
+    if (!(autoTrail.remaining !== undefined && autoTrail.remaining > 0)) {
+      const wanderT = t * 0.15;
+      vPointer.targetX = W * (0.5 + 0.35 * Math.sin(wanderT));
+      vPointer.targetY = H * (0.45 + 0.2 * Math.sin(wanderT * 1.7 + 1.3));
+    }
+
+    currentHue = 180 + Math.sin(t * 0.4) * 60;
+
+    // 1. 夜空
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+    bgGrad.addColorStop(0,    '#02030a');
+    bgGrad.addColorStop(0.4,  '#050a1c');
+    bgGrad.addColorStop(0.75, '#08122b');
+    bgGrad.addColorStop(1,    '#0d1e3d');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, W, H);
+
+    // 2. 星空
+    drawStars(t);
+
+    // 3. 极光
+    drawAurora(t);
+
+    // 4. 自动拖尾
+    emitAutoTrailPoint(dt);
+    updateAutoTrail();
+    drawAutoTrail();
+
+    // 5. 涟漪
+    autoSpawnRipple(dt);
+    updateRipples();
+    drawRipples();
+
+    // 6. 指针光晕
+    drawPointerGlow(t);
+
+    // 7. 雾气
+    drawFog(t);
+
+    requestAnimationFrame(loop);
+  }
+
+  /* ==================== 键盘快捷键 ==================== */
+  window.addEventListener('keydown', (e) => {
+    // 空格：暂停/继续
+    if (e.code === 'Space') {
+      e.preventDefault();
+      paused = !paused;
+      pauseBadge.classList.toggle('show', paused);
+      hintEl.style.opacity = paused ? '0.15' : '';
+    }
+    // F：全屏切换
+    if (e.code === 'KeyF') {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.();
+      } else {
+        document.exitFullscreen?.();
+      }
+    }
+  });
+
+  /* ==================== 时钟 ==================== */
+  function updateClock() {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    document.getElementById('clock').textContent = `${hh}:${mm}`;
+
+    const week = ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'];
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    document.getElementById('date').textContent = `${y}年${m}月${d}日  ${week[now.getDay()]}`;
+  }
+
+  /* ==================== 启动 ==================== */
+  resize();
+  updateClock();
+  setInterval(updateClock, 1000);
+  requestAnimationFrame((now) => {
+    lastT = now;
+    startTime = now;
+    loop(now);
+  });
+
+})();
+</script>
+</body>
+</html>
